@@ -503,6 +503,11 @@ copy on the MCP side should explain what access is being granted.)
 No Durable Object block and no `migrations` — the server is stateless. No service-role key
 binding exists in this project by design.
 
+**Secrets (never in `wrangler.jsonc` vars):** `VOC_SUPABASE_ANON_KEY` — the anon
+(publishable) key sent as `apikey` on every PostgREST call (§5.1). Held in `.dev.vars`
+locally (gitignored) and via `wrangler secret put` at deploy. Unit tests inject a stubbed
+fetch, so they never need the real value.
+
 ### Dependencies
 
 | Package | Role |

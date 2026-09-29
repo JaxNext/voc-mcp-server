@@ -6,6 +6,8 @@ export interface Env {
 
   /** Supabase project behind Voc (PostgREST + OAuth server). */
   VOC_SUPABASE_URL: string
+  /** Supabase anon (publishable) key — sent as `apikey` on PostgREST calls (§5.1). */
+  VOC_SUPABASE_ANON_KEY: string
   /** Client id registered in Supabase → Authentication → OAuth Apps (§7.4). */
   VOC_OAUTH_CLIENT_ID: string
   /** Exact redirect URI registered against the client above — no wildcards. */

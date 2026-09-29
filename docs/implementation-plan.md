@@ -82,44 +82,47 @@ Both verified 2026-09-29: `tsc` clean; `test/smoke.spec.ts` green under the Work
 **Goal:** the write/read semantics of §5.3 as a tested module with no MCP coupling.
 
 **PostgREST client**
-- [ ] `src/voc/postgrest.ts` — typed fetch wrapper: base URL from `VOC_SUPABASE_URL`,
+- [x] `src/voc/postgrest.ts` — typed fetch wrapper: base URL from `VOC_SUPABASE_URL`,
       `apikey: <anon>` + `Authorization: Bearer <Voc JWT>` on every request
-- [ ] Error mapping: surface PostgREST `status`, `message`, `details` — never a raw dump (§9)
-- [ ] Treat `200 + []` and `PGRST116` as *not found*, never as "user has no records" (§9)
+      *(anon key added to `Env` as `VOC_SUPABASE_ANON_KEY` — secret in `.dev.vars`, §8)*
+- [x] Error mapping: surface PostgREST `status`, `message`, `details` — never a raw dump (§9)
+- [x] Treat `200 + []` and `PGRST116` as *not found*, never as "user has no records" (§9)
 
 **Records**
-- [ ] `createRecord` — 3-step composite: `records` → `record_tags` (only if tags) →
+- [x] `createRecord` — 3-step composite: `records` → `record_tags` (only if tags) →
       `review_states` with **no fields** (DB defaults make it due immediately)
-- [ ] `createRecord` — rollback: any failure after step 1 deletes the record; the error says
+- [x] `createRecord` — rollback: any failure after step 1 deletes the record; the error says
       which step failed and that nothing was saved
-- [ ] `searchRecords` — `or=(content.ilike.…,meaning.ilike.…)` after stripping `,` `(` `)` from
+- [x] `searchRecords` — `or=(content.ilike.…,meaning.ilike.…)` after stripping `,` `(` `)` from
       the term
-- [ ] `searchRecords` — tag filter as the **two-step union** (resolve ids from `record_tags`,
+- [x] `searchRecords` — tag filter as the **two-step union** (resolve ids from `record_tags`,
       then `id=in.(…)`), not an `!inner` join
-- [ ] `searchRecords` — stable tiebreak on `id`; return `{ records, total, hasMore, page }`
-- [ ] `getRecord` — record + tags + review state (`status`, `next_review_at`)
-- [ ] `updateRecord` — read-modify-write with the **full** `{type, content, meaning, source,
+- [x] `searchRecords` — stable tiebreak on `id`; return `{ records, total, hasMore, page }`
+- [x] `getRecord` — record + tags + review state (`status`, `next_review_at`)
+- [x] `updateRecord` — read-modify-write with the **full** `{type, content, meaning, source,
       notes}` set, then a tag **diff** (remove only deselected, add only new)
-- [ ] `deleteRecord` — relies on `on delete cascade`; returns the deleted content for the
+- [x] `deleteRecord` — relies on `on delete cascade`; returns the deleted content for the
       confirmation message
 
 **Tags**
-- [ ] `listTags` — predefined + custom, as `{ name, is_predefined }`
-- [ ] `resolveTagNames` — case-insensitive match against the visible set; unknown → error
+- [x] `listTags` — predefined + custom, as `{ name, is_predefined }`
+- [x] `resolveTagNames` — case-insensitive match against the visible set; unknown → error
       listing close matches and pointing at `list_tags` (§14 **R2**); no silent creation
 
 **Schemas**
-- [ ] `src/mcp/shared/schemas.ts` — Zod schemas at Voc's exact limits (content ≤ 500,
+- [x] `src/mcp/shared/schemas.ts` — Zod schemas at Voc's exact limits (content ≤ 500,
       meaning ≤ 2000, source ≤ 500, notes ≤ 4000)
 
 **Tests**
-- [ ] `test/records.spec.ts` against a stubbed PostgREST: create happy path, rollback on
+- [x] `test/records.spec.ts` against a stubbed PostgREST: create happy path, rollback on
       step-2 and step-3 failure, update tag diff, cascade-delete call shape
-- [ ] `test/search.spec.ts`: `,()` are stripped; tag filtering issues the union, not `!inner`
-- [ ] `test/tags.spec.ts`: case-insensitivity, predefined ∪ custom, unknown-name error
-- [ ] Zod boundary tests: content 501 and meaning 2001 are rejected
+- [x] `test/search.spec.ts`: `,()` are stripped; tag filtering issues the union, not `!inner`
+- [x] `test/tags.spec.ts`: case-insensitivity, predefined ∪ custom, unknown-name error
+- [x] Zod boundary tests: content 501 and meaning 2001 are rejected
 
-**Exit criteria:** all unit tests green with no network access.
+**Exit criteria:** all unit tests green with no network access. ✅ Verified 2026-09-29:
+34 tests green (records 15, search 10, tags 8, smoke 1) under the Workers pool with an
+injected stub fetch; `tsc --noEmit` clean. See [1.2-data-layer.md](1.2-data-layer.md).
 
 ---
 
