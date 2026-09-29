@@ -144,9 +144,10 @@ voc-mcp-server/
 │   ├── tech-design.md          # this document
 │   └── implementation-plan.md  # task / subtask checklist (§12)
 ├── src/
-│   ├── index.ts                # OAuthProvider wiring + fetch export
+│   ├── index.ts                # OAuthProvider wiring + fetch export (Task 3 ships a
+│   │                           #   dev-only /mcp wiring until Task 5 lands — see §8)
 │   ├── mcp/
-│   │   ├── server.ts           # createMcpHandler factory + tool registration
+│   │   ├── server.ts           # createServer(voc) + tool registration
 │   │   ├── tools/
 │   │   │   ├── create-record.ts
 │   │   │   ├── search-records.ts
@@ -156,6 +157,8 @@ voc-mcp-server/
 │   │   │   └── list-tags.ts
 │   │   └── shared/
 │   │       ├── schemas.ts      # Zod input schemas + Voc field limits
+│   │       ├── session.ts      # VocSession { client, userId } + factory — the seam
+│   │       │                   #   that keeps tools OAuth-free (Task 5 fills it)
 │   │       ├── errors.ts       # tool-result error helpers
 │   │       └── result.ts       # content[] formatting helpers
 │   ├── voc/
@@ -518,7 +521,8 @@ fetch, so they never need the real value.
 | `zod` | tool input schemas, shared with Voc's field limits |
 
 Dev: `wrangler`, `typescript`, `@cloudflare/workers-types`, `vitest`,
-`@cloudflare/vitest-pool-workers`.
+`@cloudflare/vitest-pool-workers`, `@modelcontextprotocol/client` (drives
+`test/tools.spec.ts` over `InMemoryTransport` — the same path MCP Inspector takes).
 
 ### `src/index.ts` (shape)
 
@@ -543,6 +547,12 @@ The `createMcpHandler` factory receives the request context
 (`{ era, authInfo, requestInfo }`). `authInfo.props` carries `voc_user_id`, which the tools
 use to load the Voc credential from `VOC_SESSIONS`. **Identity comes from `authInfo`, never
 from a tool argument** — no tool accepts a `user_id`, mirroring Voc's architecture rule 4.
+
+> **Task 3 interim wiring (dev-only):** until Task 5 lands, `src/index.ts` ships a plain
+> fetch export without the OAuthProvider. On `/mcp` the bearer token is used **directly as
+> the caller's Voc JWT** and `userId` is its `sub` claim, decoded without verification.
+> This exists so the six tools are runnable and Inspectable before OAuth exists
+> (implementation-plan Task 3); it is scaffolding, replaced wholesale by the shape above.
 
 ---
 
@@ -599,6 +609,10 @@ result must never be reported as "the user has no records".
   tag filtering issues the two-step union rather than an `!inner` join.
 - Tag name resolution: case-insensitivity, predefined + custom union, unknown-name error.
 - Zod schema rejection at Voc's exact boundaries (content 501 chars, meaning 2001, etc.).
+- `test/tools.spec.ts` — the six tools over `InMemoryTransport` + MCP `Client`:
+  tools/list surface (names, titles, §6 annotations, no `user_id` input), a happy path per
+  tool, and the §9 error shapes (structured not-found, unknown tag with close matches,
+  PostgREST failure as an `isError` result).
 
 **Integration (`@cloudflare/vitest-pool-workers`):**
 

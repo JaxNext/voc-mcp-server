@@ -131,33 +131,46 @@ injected stub fetch; `tsc --noEmit` clean. See [1.2-data-layer.md](1.2-data-laye
 **Goal:** the §6 tool surface wired to Task 2, runnable before OAuth exists so iteration is fast.
 
 **Shared helpers**
-- [ ] `src/mcp/shared/result.ts` — `content[]` formatting helpers
-- [ ] `src/mcp/shared/errors.ts` — `isError: true` tool-result helpers; every message names a
-      next step (§9)
+- [x] `src/mcp/shared/result.ts` — `content[]` formatting helpers (plus
+      `src/mcp/shared/session.ts` — `VocSession`/`VocSessionFactory` injection point for Task 5)
+- [x] `src/mcp/shared/errors.ts` — `isError: true` tool-result helpers; every message names a
+      next step (§9); one `toErrorResult` dispatcher maps `UnknownTagError`/`PostgrestError`/unknown
 
 **Tools** (one file each, §4)
-- [ ] `create-record.ts` — returns the created record **with its id**
-- [ ] `search-records.ts` — mirrors `RecordListFilters`; says so explicitly when `total`
-      exceeds what was returned
-- [ ] `get-record.ts` — structured not-found error pointing at `search_records`
-- [ ] `update-record.ts` — omitted field = unchanged; `null` clears `source`/`notes`;
-      `tags: []` removes all, `tags` omitted leaves associations alone
-- [ ] `delete-record.ts` — description warns review history is destroyed and unrecoverable
-- [ ] `list-tags.ts` — no inputs; exists so the assistant can discover valid tag names
+- [x] `create-record.ts` — returns the created record **with its id**
+- [x] `search-records.ts` — mirrors `RecordListFilters`; says so explicitly when `total`
+      exceeds what was returned ("Showing 20 of 57. Narrow the filters, raise the page, or
+      increase pageSize to see the rest.")
+- [x] `get-record.ts` — structured not-found error pointing at `search_records`
+- [x] `update-record.ts` — omitted field = unchanged; `null` clears `source`/`notes`;
+      `tags: []` removes all, `tags` omitted leaves associations alone (read-modify-write
+      over `getRecord` + tag diff)
+- [x] `delete-record.ts` — description warns review history is destroyed and unrecoverable;
+      confirmation repeats the warning
+- [x] `list-tags.ts` — no inputs (`inputSchema` omitted); exists so the assistant can
+      discover valid tag names
 
 **Annotations** (every tool)
-- [ ] `title` on all six
-- [ ] `readOnlyHint` true on `search_records`, `get_record`, `list_tags`
-- [ ] `destructiveHint: true` on `delete_record` only
-- [ ] Descriptions state what the tool does, what it returns, and what it does **not** do
-- [ ] No tool accepts a `user_id` — identity comes from `authInfo` (Task 5)
-- [ ] Register all six in `src/mcp/server.ts`
+- [x] `title` on all six
+- [x] `readOnlyHint` true on `search_records`, `get_record`, `list_tags`
+- [x] `destructiveHint: true` on `delete_record` only
+- [x] Descriptions state what the tool does, what it returns, and what it does **not** do
+- [x] No tool accepts a `user_id` — identity comes from `authInfo` (Task 5); until then the
+      `/mcp` bearer token **is** the Voc JWT and `userId` is its `sub` claim (dev-only
+      scaffolding in `src/index.ts`, replaced in Task 5)
+- [x] Register all six in `src/mcp/server.ts`
 
 **Tests**
-- [ ] `test/tools.spec.ts` — happy path per tool, plus not-found and unknown-tag error shapes
+- [x] `test/tools.spec.ts` — happy path per tool, plus not-found and unknown-tag error shapes
+      (13 tests over `InMemoryTransport` + MCP `Client`, the same path Inspector takes)
 
 **Exit criteria:** MCP Inspector lists exactly six tools with the annotations above; each is
-callable with a hand-pasted Voc JWT.
+callable with a hand-pasted Voc JWT. ✅ Verified 2026-09-29: 47 tests green (tools 13, records
+15, search 10, tags 8, smoke 1); `tsc --noEmit` clean; against `wrangler dev` on :8787,
+`initialize` + `tools/list` over streamable HTTP returned exactly the six tools with the §6
+annotations, and a missing bearer token got 401. A real Voc JWT end-to-end call needs the real
+anon key + a live Supabase — that final smoke is a user step (Voc keeps no local `.env`).
+See [1.3-mcp-tools.md](1.3-mcp-tools.md).
 
 ---
 
