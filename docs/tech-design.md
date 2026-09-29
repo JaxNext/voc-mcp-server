@@ -169,6 +169,7 @@ voc-mcp-server/
 │   └── types/
 │       └── env.ts              # Env bindings + secrets
 ├── test/
+│   ├── smoke.spec.ts           # harness canary (Task 1)
 │   ├── records.spec.ts
 │   ├── search.spec.ts
 │   ├── tags.spec.ts
@@ -176,6 +177,7 @@ voc-mcp-server/
 │   └── auth.spec.ts
 ├── wrangler.jsonc
 ├── package.json
+├── pnpm-workspace.yaml         # pnpm 12 build approvals (allowBuilds)
 └── tsconfig.json
 ```
 
@@ -480,7 +482,10 @@ copy on the MCP side should explain what access is being granted.)
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "voc-mcp-server",
   "main": "src/index.ts",
-  "compatibility_date": "2026-09-01",
+  // 2026-08-22, not 2026-09-01: @cloudflare/vitest-pool-workers 0.22.0 pins
+  // miniflare 5.20260815.0-alpha, whose runtime accepts no later date. Dev, test
+  // and deploy share one date; bump it when pool-workers ships a newer runtime.
+  "compatibility_date": "2026-08-22",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "kv_namespaces": [

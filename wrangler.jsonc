@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "voc-mcp-server",
+  "main": "src/index.ts",
+  // 2026-08-22, not 2026-09-01 (§8): @cloudflare/vitest-pool-workers 0.22.0 pins
+  // miniflare 5.20260815.0-alpha whose runtime accepts no later date. Bump both
+  // together when pool-workers ships a newer runtime.
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  // Both namespaces are simulated locally by `wrangler dev`; real ids are created
+  // and filled in by Task 7 of docs/implementation-plan.md.
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV", "id": "TODO-task-7-oauth-kv" },
+    { "binding": "VOC_SESSIONS", "id": "TODO-task-7-voc-sessions" }
+  ],
+  "vars": {
+    "VOC_SUPABASE_URL": "https://mqehfyrkgyzodlqwkozf.supabase.co",
+    // Task 4 registers the dev client in Supabase → Authentication → OAuth Apps
+    // and fills this in (§7.4).
+    "VOC_OAUTH_CLIENT_ID": "TODO-task-4",
+    // Dev redirect URI, pinned to port 8787 so the registered callback stays valid
+    // (Task 4). Task 7 overrides this with the deployed URI.
+    "VOC_REDIRECT_URI": "http://localhost:8787/callback"
+  }
+}

@@ -51,22 +51,29 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 **Goal:** a Worker that boots and serves an empty MCP endpoint, with config, bindings and the
 test harness in place (§8).
 
-- [ ] `pnpm init`; `tsconfig.json` with `strict: true`
-- [ ] Add runtime deps, exact-pinned: `agents`, `@modelcontextprotocol/server@2.0.0`,
-      `@cloudflare/workers-oauth-provider`, `zod`
-- [ ] Add dev deps: `wrangler`, `typescript`, `@cloudflare/workers-types`, `vitest`,
-      `@cloudflare/vitest-pool-workers`
-- [ ] `wrangler.jsonc` — `name`, `main`, `compatibility_date: "2026-09-01"`,
+- [x] `pnpm init`; `tsconfig.json` with `strict: true`
+- [x] Add runtime deps, exact-pinned: `agents@0.24.0`, `@modelcontextprotocol/server@2.0.0`,
+      `@cloudflare/workers-oauth-provider@1.1.0`, `zod@4.6.5`
+- [x] Add dev deps: `wrangler@4.124.0`, `typescript@7.0.2`, `@cloudflare/workers-types@5.20260928.1`,
+      `vitest@4.1.11`, `@cloudflare/vitest-pool-workers@0.22.0`
+- [x] `pnpm-workspace.yaml` — `allowBuilds` for `esbuild`, `core-js-pure`, `workerd`
+      (pnpm 12 blocks postinstall scripts by default; moved out of the dead `pnpm` package.json field)
+- [x] `wrangler.jsonc` — `name`, `main`, `compatibility_date: "2026-08-22"`,
       `compatibility_flags: ["nodejs_compat"]`, `observability.enabled`, `vars`
-- [ ] Declare both KV bindings: `OAUTH_KV`, `VOC_SESSIONS`
-- [ ] `src/types/env.ts` — typed `Env` for the bindings and vars
-- [ ] `src/mcp/server.ts` — `createServer()` returning an `McpServer` with no tools yet
-- [ ] `src/index.ts` — minimal `fetch` export (no OAuth wiring yet)
-- [ ] `wrangler.jsonc` has **no** Durable Object block and **no** service-role binding (§8)
-- [ ] `vitest.config.ts` using the Workers pool
-- [ ] `.gitignore` for `.wrangler/`, `node_modules/`, `.dev.vars`
+      *(the design's `2026-09-01` is above the newest date supported by pool-workers 0.22.0's
+      pinned runtime — see [1.1-worker-scaffold.md](1.1-worker-scaffold.md); bump both together)*
+- [x] Declare both KV bindings: `OAUTH_KV`, `VOC_SESSIONS` (placeholder ids; Task 7 fills real ones)
+- [x] `src/types/env.ts` — typed `Env` for the bindings and vars
+- [x] `src/mcp/server.ts` — `createServer()` returning an `McpServer` with no tools yet
+- [x] `src/index.ts` — minimal `fetch` export (no OAuth wiring yet)
+- [x] `wrangler.jsonc` has **no** Durable Object block and **no** service-role binding (§8)
+- [x] `vitest.config.ts` using the Workers pool (v4 plugin shape: `cloudflareTest()` in `plugins`;
+      the old `defineWorkersConfig` from `…/config` no longer exists in 0.22.0)
+- [x] `.gitignore` for `.wrangler/`, `node_modules/`, `.dev.vars`
 
-**Exit criteria:** `wrangler dev` starts and answers on `/mcp`; `tsc --noEmit` is clean.
+**Exit criteria:** `wrangler dev` starts and answers on `/mcp`; `tsc --noEmit` is clean. ✅
+Both verified 2026-09-29: `tsc` clean; `test/smoke.spec.ts` green under the Workers pool;
+`/mcp` → `501 {"error":"not_wired_yet"}`, `/` → `200`.
 
 ---
 
