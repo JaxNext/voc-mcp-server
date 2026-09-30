@@ -491,6 +491,9 @@ copy on the MCP side should explain what access is being granted.)
   "compatibility_date": "2026-08-22",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Pin the dev port: the Supabase-registered redirect URI is
+  // http://localhost:8787/callback and must keep matching exactly (§7.4).
+  "dev": { "port": 8787 },
   "kv_namespaces": [
     { "binding": "OAUTH_KV",     "id": "<workers-oauth-provider KV>" },
     { "binding": "VOC_SESSIONS", "id": "<voc token custody KV>" }
@@ -540,6 +543,9 @@ export default new OAuthProvider({
   tokenEndpoint: '/token',
   clientRegistrationEndpoint: '/register',
   accessTokenTTL: 60 * 60 * 24 * 30,
+  // Required by workers-oauth-provider 1.1.0 (RFC 9728 protected-resource
+  // metadata); the provider throws at construction without it.
+  resourceMetadata: { resource, resource_name: 'voc-mcp-server' },
 })
 ```
 
@@ -618,7 +624,9 @@ result must never be reported as "the user has no records".
 
 - OAuth metadata documents are well-formed; `/register` returns a usable client.
 - A full PKCE code exchange against a mocked Supabase, asserting the stored session lands in
-  `VOC_SESSIONS` and that props contain `voc_user_id` but **no** refresh token.
+  `VOC_SESSIONS` and that props contain `voc_user_id` but **no** refresh token. The stub is
+  injected as the auth handler's `fetchImpl` (pool-workers 0.22.0 no longer ships `fetchMock`):
+  the real `OAuthProvider` and real KV run, only Supabase's two endpoints are replaced.
 - Refresh-on-expiry path; refresh-failure path returns 401 + `WWW-Authenticate`.
 - `/mcp` rejects a missing/foreign bearer token.
 

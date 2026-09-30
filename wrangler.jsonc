@@ -8,6 +8,9 @@
   "compatibility_date": "2026-08-22",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Pin the dev port: the Supabase-registered redirect URI is
+  // http://localhost:8787/callback and must keep matching exactly (§7.4).
+  "dev": { "port": 8787 },
   // Both namespaces are simulated locally by `wrangler dev`; real ids are created
   // and filled in by Task 7 of docs/implementation-plan.md.
   "kv_namespaces": [

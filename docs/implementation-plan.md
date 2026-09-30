@@ -178,30 +178,47 @@ See [1.3-mcp-tools.md](1.3-mcp-tools.md).
 
 **Goal:** the browser flow of §3 ends with a Voc token in KV (§7.3).
 
-- [ ] `src/auth/token-store.ts` — KV get/put/delete of
+- [x] `src/auth/token-store.ts` — KV get/put/delete of
       `{ refresh_token, access_token, expires_at, scope }` keyed by `voc_user_id`
-- [ ] `src/auth/handler.ts` — `defaultHandler` starts the authorization-code + PKCE flow
-      against Supabase with the `VOC_CLIENT_ID`
-- [ ] `src/auth/handler.ts` — `/callback` exchanges the code at
-      `POST /auth/v1/oauth/token` (`auth method: none`), stores the session, returns grant
-      props
-- [ ] Grant props carry **only** `{ voc_user_id, voc_email }` — no refresh token, because
-      props are write-once and cannot rotate (§7.3)
-- [ ] Request `offline_access` at authorize time (§7.5)
-- [ ] `src/auth/consent.ts` — Worker-side consent screen with CSRF via `__Host-CSRF_TOKEN`
-      and escaped `client_name` / `logo_uri`
-- [ ] Pin `wrangler dev` to port **8787** so the registered redirect URI stays valid
+      (`getVocSession`/`putVocSession`/`deleteVocSession`, JSON values; no refresh logic yet — Task 6)
+- [x] `src/auth/handler.ts` — `defaultHandler` starts the authorization-code + PKCE flow
+      against Supabase with the `VOC_OAUTH_CLIENT_ID` (`authorize` → consent → `beginUpstream`
+      → 302 to `{VOC_SUPABASE_URL}/auth/v1/oauth/authorize`, 32-byte S256 verifier)
+- [x] `src/auth/handler.ts` — `/callback` exchanges the code at
+      `POST /auth/v1/oauth/token` (`auth_method: none`, `client_id` + `code_verifier`, no
+      secret), stores the session in `VOC_SESSIONS`, returns grant props
+- [x] Grant props carry **only** `{ voc_user_id, voc_email }` — no refresh token, because
+      props are write-once and cannot rotate (§7.3). Enforced by `VocGrantProps` and asserted
+      in the test (`JSON.stringify(summary)` contains no refresh token)
+- [x] Request `offline_access` at authorize time (§7.5) — `VOC_SCOPE`; a token response with
+      no `refresh_token` is refused with 502 rather than silently stored
+- [x] `src/auth/consent.ts` — Worker-side consent screen with CSRF via `__Host-CSRF_TOKEN`
+      (HttpOnly; Secure; SameSite=Lax) + hidden form field; `escapeHtml` on `client_name`, and
+      `logo_uri` rendered only when `https:` (`isSafeLogoUri`)
+- [x] Pin `wrangler dev` to port **8787** so the registered redirect URI stays valid
+      (`"dev": { "port": 8787 }` in `wrangler.jsonc`)
 - [ ] **Manual:** register `Voc MCP Server (dev)`, type `public`, redirect
-      `http://localhost:8787/callback` in Supabase → Authentication → OAuth Apps (§7.4)
-- [ ] Do **not** reuse the existing test client `9b5a1ba3-…` — its redirect URI is
-      `http://localhost:3000/callback` (§7.4)
+      `http://localhost:8787/callback` in Supabase → Authentication → OAuth Apps (§7.4).
+      **User step — not yet done.** `VOC_OAUTH_CLIENT_ID` is still the placeholder
+      `TODO-task-4`; the value is set in `.dev.vars`.
+- [x] Do **not** reuse the existing test client `9b5a1ba3-…` — its redirect URI is
+      `http://localhost:3000/callback` (§7.4). No such id appears in the source or config.
 
 **Tests**
-- [ ] `test/auth.spec.ts` — a full PKCE exchange against a mocked Supabase lands the session in
-      `VOC_SESSIONS` and yields props with `voc_user_id` but **no** refresh token
+- [x] `test/auth.spec.ts` — a full PKCE exchange against a mocked Supabase lands the session in
+      `VOC_SESSIONS` and yields props with `voc_user_id` but **no** refresh token (8 tests:
+      full walkthrough, CSRF mismatch → 403, deny → `access_denied`, forged state → 400,
+      rejected exchange → recovery page, no-refresh-token → 502, token-store round-trip,
+      `toVocSession` unit)
 
 **Exit criteria:** a browser walk-through completes both consents and leaves a Voc token in
-`VOC_SESSIONS`.
+`VOC_SESSIONS`. ✅ Code + tests verified 2026-09-29: 55 tests green (`auth` 8), `tsc --noEmit`
+clean. The full browser walk-through **cannot be exercised from Task 4 alone** — the
+`OAuthProvider` that dispatches `/authorize`/`/callback` is wired in Task 5, and it needs the
+real client id from the manual Supabase registration above. The end-to-end test drives the real
+`OAuthProvider` + real KV with only Supabase stubbed at the handler's fetch seam, so the
+authorize → consent → callback → grant → `/token` chain is already covered. See
+[1.4-oauth-client.md](1.4-oauth-client.md).
 
 ---
 
