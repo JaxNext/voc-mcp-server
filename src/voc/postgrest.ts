@@ -87,7 +87,11 @@ export class PostgrestClient {
     this.base = `${options.baseUrl.replace(/\/+$/, '')}/rest/v1`
     this.anonKey = options.anonKey
     this.token = options.token
-    this.doFetch = options.fetchImpl ?? fetch
+    // Bind the Workers global: `this.doFetch(...)` below invokes it with the
+    // client as `this`, and the global `fetch` rejects any receiver other than
+    // the global scope with "Illegal invocation". Injected stubs are called
+    // as-is so tests keep their identity.
+    this.doFetch = options.fetchImpl ?? fetch.bind(globalThis)
   }
 
   /** Multi-row select. An empty result is `rows: []`, never an error. */
