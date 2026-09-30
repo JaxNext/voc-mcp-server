@@ -226,25 +226,57 @@ authorize → consent → callback → grant → `/token` chain is already cover
 
 **Goal:** MCP clients can discover, register and call the server (§7.1, §7.2).
 
-- [ ] Wire `OAuthProvider` in `src/index.ts` per the §8 shape: `apiRoute: '/mcp'`,
-      `defaultHandler`, `authorizeEndpoint: '/authorize'`, `tokenEndpoint: '/token'`,
-      `clientRegistrationEndpoint: '/register'`
-- [ ] `apiHandler: createMcpHandler(createServer)`; confirm the SDK is on the **v2** stateless
-      path (no `initialize`, no `Mcp-Session-Id`) — §3.1
-- [ ] `accessTokenTTL` set long (the client token gates nothing but this Worker) — §7.3
-- [ ] Set `allowedHostnames` to the deployment hostname (DNS-rebinding hardening) — §10
-- [ ] RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`
-- [ ] Tools read `voc_user_id` from `authInfo.props` and load the credential from
-      `VOC_SESSIONS` — never from a tool argument (§8)
-- [ ] DCR-only: do not attempt CIMD (§14 **R1**)
+- [x] Wire `OAuthProvider` in `src/provider.ts` per the §8 shape: `apiRoute: '/mcp'`,
+      `defaultHandler: vocAuthHandler`, `authorizeEndpoint: '/authorize'`,
+      `tokenEndpoint: '/token'`, `clientRegistrationEndpoint: '/register'`. The wiring sits in
+      `src/provider.ts` (not the entry module) because workerd validates `src/index.ts`'s named
+      exports as worker entrypoints — a plain string/array export aborts startup
+      (`Incorrect type for map entry 'RESOURCE'`). `src/index.ts` is now
+      `export { default } from './provider'`
+- [x] `apiHandler` is an object wrapper `{ fetch(request, env, ctx) }` around
+      `createMcpHandler(() => createServer(factory), { allowedHostnames })` — the provider's
+      `validateHandler` requires an object with `.fetch` (a bare handler function is rejected),
+      and all three args are forwarded so the provider-set `ctx.props` reaches the handler.
+      Confirmed **v2** stateless path: `tools/list` reply has **no `Mcp-Session-Id`** and no
+      `initialize` handshake — §3.1
+- [x] `accessTokenTTL` = `60 * 60 * 24 * 30` (30 days); the client token gates nothing but this
+      Worker — §7.3
+- [x] `allowedHostnames: ['localhost']` (dev value, `ALLOWED_HOSTNAMES` in `src/provider.ts`;
+      Task 7 replaces it with the deployed hostname) — DNS-rebinding hardening, §10
+- [x] RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource` via the
+      required `resourceMetadata: { resource: 'http://localhost:8787', resource_name:
+      'voc-mcp-server' }`; live `GET` → `200 {"resource":"http://localhost:8787",
+      "authorization_servers":["http://localhost:8787"],"bearer_methods_supported":["header"],
+      "resource_name":"voc-mcp-server"}`
+- [x] Tools read `voc_user_id` from `getMcpAuthContext().props` (the provider sets `ctx.props`;
+      the MCP handler surfaces it) and load the credential from `VOC_SESSIONS` via
+      `getVocSession` — never from a tool argument (§8)
+- [x] DCR-only: no CIMD. `client_id_metadata_document_supported: false` in the live AS metadata;
+      the runtime warning `CIMD (Client ID Metadata Document) is disabled` is expected (§14 **R1**)
 
 **Tests**
-- [ ] Integration: AS + protected-resource metadata are well-formed
-- [ ] Integration: `/register` returns a usable client
-- [ ] Integration: `/mcp` rejects a missing or foreign bearer token
+- [x] Integration: AS + protected-resource metadata are well-formed — `GET
+      /.well-known/oauth-authorization-server` and `.../oauth-protected-resource` (issuer +
+      endpoints + `code_challenge_methods_supported` includes `S256`; `resource` echoes the
+      origin, `bearer_methods_supported` includes `header`)
+- [x] Integration: `/register` returns a usable client — `201` with `{ client_id, redirect_uris,
+      token_endpoint_auth_method: 'none', … }`; the returned client then renders the consent page
+- [x] Integration: `/mcp` rejects a missing or foreign bearer token — no `Authorization` → `401`
+      + `WWW-Authenticate: Bearer realm="OAuth", resource_metadata="…/.well-known/
+      oauth-protected-resource"`; opaque token → `401`; foreign 3-part internal token → `401`
+- [x] **End-to-end** (real `OAuthProvider` + real KV, only Supabase stubbed at the handler's
+      fetch seam): DCR → `/authorize` → consent POST → `/callback` → `/token` → `POST /mcp`
+      `tools/list` with the issued bearer → `200`, no `Mcp-Session-Id`, and exactly the six
+      tools (`create_record, delete_record, get_record, list_tags, search_records, update_record`).
+      See `test/oauth-provider.spec.ts` (7 tests)
 
 **Exit criteria:** MCP Inspector completes discovery → DCR → authorize → token → a real tool
-call, end to end.
+call, end to end. ✅ Code + tests verified 2026-09-30: 62 tests green (`oauth-provider` 7),
+`tsc --noEmit` clean, `wrangler dev` serves on `http://localhost:8787` (curl-verified: AS
+metadata `200`, protected-resource metadata `200`, `/register` `201`, `/mcp` no bearer `401`).
+The Inspector walk-through itself needs the manual Supabase client registration from Task 4
+(still `TODO-task-4`); the end-to-end integration test covers the same chain against the real
+provider with Supabase stubbed. See [1.5-oauth-provider.md](1.5-oauth-provider.md).
 
 ---
 

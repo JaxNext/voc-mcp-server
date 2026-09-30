@@ -527,17 +527,52 @@ Dev: `wrangler`, `typescript`, `@cloudflare/workers-types`, `vitest`,
 `@cloudflare/vitest-pool-workers`, `@modelcontextprotocol/client` (drives
 `test/tools.spec.ts` over `InMemoryTransport` — the same path MCP Inspector takes).
 
-### `src/index.ts` (shape)
+### `src/index.ts` / `src/provider.ts` (shape)
+
+The wiring lives in `src/provider.ts`, **not** in the entry module. workerd validates the
+entry module's named exports as worker entrypoints (each must be a function or an
+`ExportedHandler`), so exporting the plain `RESOURCE` string / `ALLOWED_HOSTNAMES` array from
+`src/index.ts` makes the Worker fail to start. `src/index.ts` is therefore a one-liner:
+
+```ts
+// src/index.ts — entry module: default handler only.
+export { default } from './provider'
+```
+
+`src/provider.ts` holds the provider and its supporting constants (dev values; Task 7
+replaces `RESOURCE`/`ALLOWED_HOSTNAMES` with the deployed hostname):
 
 ```ts
 import { OAuthProvider } from '@cloudflare/workers-oauth-provider'
-import { createMcpHandler } from 'agents/mcp/server'
+import { createMcpHandler, getMcpAuthContext } from 'agents/mcp/server'
 import { createServer } from './mcp/server'
 import { vocAuthHandler } from './auth/handler'
 
-export default new OAuthProvider({
+export const RESOURCE = 'http://localhost:8787'
+export const ALLOWED_HOSTNAMES = ['localhost']
+
+export function createVocSessionFactory(env: Env): VocSessionFactory {
+  return async () => {
+    const userId = getMcpAuthContext()?.props?.voc_user_id
+    // …load the Voc credential from env.VOC_SESSIONS, build the PostgREST client
+  }
+}
+
+// apiHandler must be an object with `.fetch` (the provider's validateHandler
+// rejects a bare function). Pass all three args through so the provider-set
+// ctx.props reaches the MCP handler.
+export const vocApiHandler = {
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const handler = createMcpHandler(() => createServer(createVocSessionFactory(env)), {
+      allowedHostnames: ALLOWED_HOSTNAMES,
+    })
+    return handler(request, env, ctx)
+  },
+}
+
+export default new OAuthProvider<Env>({
   apiRoute: '/mcp',
-  apiHandler: createMcpHandler(createServer),
+  apiHandler: vocApiHandler,
   defaultHandler: vocAuthHandler,
   authorizeEndpoint: '/authorize',
   tokenEndpoint: '/token',
@@ -545,20 +580,20 @@ export default new OAuthProvider({
   accessTokenTTL: 60 * 60 * 24 * 30,
   // Required by workers-oauth-provider 1.1.0 (RFC 9728 protected-resource
   // metadata); the provider throws at construction without it.
-  resourceMetadata: { resource, resource_name: 'voc-mcp-server' },
+  resourceMetadata: { resource: RESOURCE, resource_name: 'voc-mcp-server' },
 })
 ```
 
-The `createMcpHandler` factory receives the request context
-(`{ era, authInfo, requestInfo }`). `authInfo.props` carries `voc_user_id`, which the tools
-use to load the Voc credential from `VOC_SESSIONS`. **Identity comes from `authInfo`, never
-from a tool argument** — no tool accepts a `user_id`, mirroring Voc's architecture rule 4.
+Two deliberate deviations from the earlier sketch: the `apiHandler` is an **object wrapper**
+(not the literal `createMcpHandler(createServer)`), because the provider calls
+`apiHandler.handler.fetch(request, env, ctx)` and requires an object; and the wiring is split
+into `src/provider.ts` for the workerd entry-module rule above.
 
-> **Task 3 interim wiring (dev-only):** until Task 5 lands, `src/index.ts` ships a plain
-> fetch export without the OAuthProvider. On `/mcp` the bearer token is used **directly as
-> the caller's Voc JWT** and `userId` is its `sub` claim, decoded without verification.
-> This exists so the six tools are runnable and Inspectable before OAuth exists
-> (implementation-plan Task 3); it is scaffolding, replaced wholesale by the shape above.
+The provider sets `ctx.props` from the grant, and the MCP handler surfaces it as
+`getMcpAuthContext().props`. `props.voc_user_id` — set by the authorize handler (§7.2), never
+by a tool argument — is the only identity source: the session factory reads it to load the Voc
+credential from `VOC_SESSIONS`. **No tool accepts a `user_id`**, mirroring Voc's architecture
+rule 4.
 
 ---
 
@@ -592,8 +627,9 @@ result must never be reported as "the user has no records".
   own consent dialog, with CSRF protection via a `__Host-CSRF_TOKEN` cookie and output
   escaping of the client-supplied `client_name` / `logo_uri`. Without this, a malicious
   client could exploit cached upstream consent (confused-deputy).
-- **`voc_user_id` comes from `authInfo.props`**, written by the Worker after verifying
-  Supabase's token — not from anything the client sends.
+- **`voc_user_id` comes from the provider-attached grant props** (read as
+  `getMcpAuthContext().props.voc_user_id`), written by the Worker after verifying Supabase's
+  token on `/callback` — not from anything the client sends.
 - **KV entries are encrypted at rest by Cloudflare**, and grants are encrypted by the library.
   Refresh tokens are the sensitive payload; never log them, never put them in a tool result.
 - **Narrow RLS surface:** the Worker can read/write the same rows the Voc app can. Deleting a
