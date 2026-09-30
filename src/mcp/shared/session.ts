@@ -1,6 +1,8 @@
 // Per-request Voc access, injected into every tool (§8). Identity comes from
-// the Worker — never from tool input. Task 5 builds the session from
-// `authInfo.props` + VOC_SESSIONS KV; Task 3's dev wiring and the tests stub it.
+// the Worker — never from tool input. The `/mcp` api handler (src/provider.ts)
+// builds the session from the provider-attached grant props + VOC_SESSIONS KV,
+// refreshing the Voc credential on expiry before a tool ever runs (§7.3); the
+// tests stub it.
 
 import type { PostgrestClient } from '../../voc/postgrest'
 

@@ -284,21 +284,39 @@ provider with Supabase stubbed. See [1.5-oauth-provider.md](1.5-oauth-provider.m
 
 **Goal:** the long-lived behaviour of §7.3.
 
-- [ ] Read the Voc access token per request; refresh when it expires within 60s
-- [ ] Refresh via `POST /auth/v1/oauth/token` with `grant_type=refresh_token`; write the new
-      pair back to `VOC_SESSIONS`
-- [ ] On refresh failure (revoked / expired / signed out of Voc): delete the KV entry and
+- [x] Read the Voc access token per request; refresh when it expires within 60s
+      — `src/auth/refresh.ts` (`REFRESH_SKEW_SECONDS = 60`, `loadVocSession`) called from
+      the `/mcp` preflight in `src/provider.ts` (`createVocApiHandler`); a still-valid token
+      passes through untouched (test: *passes a still-valid token through without refreshing*).
+- [x] Refresh via `POST /auth/v1/oauth/token` with `grant_type=refresh_token`; write the new
+      pair back to `VOC_SESSIONS` — `refreshVocSession` posts `grant_type=refresh_token` +
+      `client_id` + `auth_method=none`; `loadVocSession` `putVocSession`s the rotated pair
+      (test: *refreshes when the token expires within 60s and persists the rotated pair*).
+- [x] On refresh failure (revoked / expired / signed out of Voc): delete the KV entry and
       return `401` with a `WWW-Authenticate` challenge so the client re-runs the full flow
-- [ ] Never degrade a 401 into empty results — an assistant must not conclude "no records" (§7.3)
-- [ ] Confirm refresh-token rotation is acceptable for a single-user deployment; note the
-      Durable Object escape hatch if concurrent refreshes ever collide (§7.3)
+      — `loadVocSession` `deleteVocSession`s on any failure and throws
+      `VocSessionExpiredError`; the preflight maps it to `bearerChallenge(RESOURCE)`
+      (test: *returns 401 + WWW-Authenticate and clears KV when Voc rejects the refresh*).
+- [x] Never degrade a 401 into empty results — an assistant must not conclude "no records" (§7.3)
+      — the preflight runs *before* the MCP dispatch, so a data tool (`list_tags`, which would
+      answer `[]`) never runs; it becomes a `401` for the client (test: *surfaces revocation on
+      a data tool as re-auth, never as []*).
+- [x] Confirm refresh-token rotation is acceptable for a single-user deployment; note the
+      Durable Object escape hatch if concurrent refreshes ever collide (§7.3) — accepted in
+      §7.3: rotation is a negligible race for one user; the DO-keyed-by-`voc_user_id` escape
+      hatch is recorded there and in `tech-design.md` §7.3. No code change until it bites.
 
-**Tests**
-- [ ] Refresh-on-expiry path succeeds and persists the new token pair
-- [ ] Refresh-failure path returns 401 + `WWW-Authenticate`
-- [ ] Revocation is surfaced as re-authentication, **not** as `[]` or zeroed output
+**Tests** — `test/refresh.spec.ts` (4 tests, real KV via `cloudflare:test`, Supabase stubbed):
+- [x] Refresh-on-expiry path succeeds and persists the new token pair
+- [x] Refresh-failure path returns 401 + `WWW-Authenticate`
+- [x] Revocation is surfaced as re-authentication, **not** as `[]` or zeroed output
 
-**Exit criteria:** TTL expiry and session revocation both resolve by re-authentication.
+**Exit criteria:** TTL expiry and session revocation both resolve by re-authentication. ✅ Verified
+2026-09-30: 66 tests green (refresh 4), `tsc --noEmit` clean, `wrangler dev` boots. The live
+`/mcp` no-bearer gate still returns `401` + `WWW-Authenticate`. The refresh/revocation paths are
+exercised against real KV in the Workers pool (the live path needs a real Voc credential — the
+manual Supabase client from Task 4 is still pending). See
+[1.6-token-refresh.md](1.6-token-refresh.md).
 
 ---
 

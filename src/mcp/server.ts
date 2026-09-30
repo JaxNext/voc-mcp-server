@@ -14,8 +14,9 @@ import type { VocSessionFactory } from './shared/session'
  * calls this factory once per HTTP request.
  *
  * Voc access is injected via `voc` so the tools stay free of OAuth coupling:
- * Task 5 builds the session from `authInfo` + KV, tests stub it. No tool
- * accepts a `user_id` — identity always comes from this session (§8).
+ * the `/mcp` api handler builds the session from the grant props + KV, tests
+ * stub it. No tool accepts a `user_id` — identity always comes from this
+ * session (§8).
  */
 export function createServer(voc: VocSessionFactory): McpServer {
   const server = new McpServer({

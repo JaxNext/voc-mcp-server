@@ -7,21 +7,26 @@
 //     (src/auth/handler.ts, Task 4).
 // The user therefore consents twice: once to the MCP client here, once at Voc.
 //
-// `/mcp` is the provider's `apiRoute`: the provider authenticates the client's
-// bearer token, resolves the grant props, and only then hands the request to
-// the MCP handler below. Identity (`voc_user_id`) reaches the tools through
-// `getMcpAuthContext().props`; the live Voc credential is loaded from
-// VOC_SESSIONS keyed by that id — never from a tool argument (§8, §10).
+// `/mcp` is the provider's `apiRoute`. The provider authenticates the client's
+// bearer token, decrypts the grant, attaches its props to `ctx.props`, and only
+// then hands the request to the handler below. Identity (`voc_user_id`) is read
+// from those props; the live Voc credential is loaded — and refreshed when it is
+// about to expire — from VOC_SESSIONS (src/auth/refresh.ts). Neither the identity
+// nor the credential is ever a tool argument (§8, §10).
+//
+// The refresh/expiry preflight runs here, *before* the MCP handler, so an
+// unusable Voc session becomes a real `401` + `WWW-Authenticate` (§7.3). A tool
+// cannot do that: tools turn every error into an `isError` result (§9).
 //
 // `src/index.ts` re-exports only this default: workerd validates the entry
 // module's named exports as worker entrypoints, so every other value lives here.
 
 import { OAuthProvider } from '@cloudflare/workers-oauth-provider'
-import { createMcpHandler, getMcpAuthContext } from 'agents/mcp/server'
-import { vocAuthHandler } from './auth/handler'
-import { getVocSession } from './auth/token-store'
+import { createMcpHandler } from 'agents/mcp/server'
+import { vocAuthHandler, type VocGrantProps } from './auth/handler'
+import { loadVocSession, VocSessionExpiredError } from './auth/refresh'
+import type { VocTokenSession } from './auth/token-store'
 import { createServer } from './mcp/server'
-import type { VocSessionFactory } from './mcp/shared/session'
 import type { Env } from './types/env'
 import { PostgrestClient } from './voc/postgrest'
 
@@ -47,47 +52,81 @@ export const ALLOWED_HOSTNAMES = ['localhost']
 const ACCESS_TOKEN_TTL = 60 * 60 * 24 * 30
 
 /**
- * Builds the per-request Voc session from the authenticated identity (§8):
- * `voc_user_id` from the grant props the provider attached to the request, and
- * the credential set from VOC_SESSIONS. A missing either is an explicit error,
- * never an empty result — the tools turn it into an `isError` result (§7.3, §9).
+ * The provider sets `ctx.props` from the decrypted grant immediately before it
+ * dispatches the api handler (workers-oauth-provider 1.1.0). The global
+ * `ExecutionContext` type does not carry props, hence the cast.
  */
-export function createVocSessionFactory(env: Env): VocSessionFactory {
-  return async () => {
-    const props = getMcpAuthContext()?.props
-    const userId = props?.voc_user_id
-    if (typeof userId !== 'string' || userId === '') {
-      throw new Error('No Voc identity on this request. Reconnect the MCP client to Voc.')
-    }
-    const session = await getVocSession(env.VOC_SESSIONS, userId)
-    if (!session) {
-      throw new Error('No stored Voc credential for this user. Reconnect the MCP client to Voc.')
-    }
-    return {
-      client: new PostgrestClient({
-        baseUrl: env.VOC_SUPABASE_URL,
-        anonKey: env.VOC_SUPABASE_ANON_KEY,
-        token: session.access_token,
-      }),
-      userId,
-    }
-  }
+type ProviderContext = ExecutionContext & { props?: Partial<VocGrantProps> }
+
+export interface VocApiHandlerOptions {
+  /** Injectable for tests; reaches both the Voc refresh and the PostgREST client. */
+  fetchImpl?: typeof fetch
 }
 
 /**
  * The protected handler. It must be an *object* exposing `fetch`: the provider
  * validates `apiHandler` as an `ExportedHandler` (a bare function fails that
- * check) and dispatches with `fetch(request, env, ctx)`. The three arguments
- * matter — `ctx` carries the grant props the provider decrypts, which the MCP
- * handler surfaces through `getMcpAuthContext()`.
+ * check) and dispatches with `fetch(request, env, ctx)` — `ctx` carries the
+ * grant props the provider decrypted.
+ *
+ * Before dispatching it resolves the Voc session: identity from `ctx.props`,
+ * credential from VOC_SESSIONS with refresh-on-expiry. A missing identity or an
+ * unusable credential returns `401` + `WWW-Authenticate` so the client
+ * re-authenticates — never an empty tool result (§7.3, §9).
  */
-export const vocApiHandler = {
-  fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const handler = createMcpHandler(() => createServer(createVocSessionFactory(env)), {
-      allowedHostnames: ALLOWED_HOSTNAMES,
-    })
-    return handler(request, env, ctx)
-  },
+export function createVocApiHandler(options: VocApiHandlerOptions = {}) {
+  const doFetch = options.fetchImpl ?? fetch
+  return {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+      const userId = (ctx as ProviderContext).props?.voc_user_id
+      if (typeof userId !== 'string' || userId === '') {
+        return bearerChallenge(RESOURCE)
+      }
+
+      let session: VocTokenSession
+      try {
+        session = await loadVocSession(env, userId, Math.floor(Date.now() / 1000), doFetch)
+      } catch (error) {
+        if (error instanceof VocSessionExpiredError) {
+          return bearerChallenge(RESOURCE)
+        }
+        throw error
+      }
+
+      const handler = createMcpHandler(
+        () =>
+          createServer(async () => ({
+            client: new PostgrestClient({
+              baseUrl: env.VOC_SUPABASE_URL,
+              anonKey: env.VOC_SUPABASE_ANON_KEY,
+              token: session.access_token,
+              fetchImpl: doFetch,
+            }),
+            userId,
+          })),
+        { allowedHostnames: ALLOWED_HOSTNAMES },
+      )
+      return handler(request, env, ctx)
+    },
+  }
+}
+
+export const vocApiHandler = createVocApiHandler()
+
+/**
+ * RFC 6750 challenge for an unusable Voc session. Mirrors the provider's own
+ * 401 shape (`createBearerChallenge`) so a client treats an expired Voc grant
+ * exactly like a missing Worker token: re-run discovery → authorize → token.
+ */
+function bearerChallenge(resource: string): Response {
+  return new Response(null, {
+    status: 401,
+    headers: {
+      'Cache-Control': 'no-store',
+      Pragma: 'no-cache',
+      'WWW-Authenticate': `Bearer realm="OAuth", resource_metadata="${resource}/.well-known/oauth-protected-resource"`,
+    },
+  })
 }
 
 export default new OAuthProvider<Env>({

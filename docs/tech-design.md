@@ -544,31 +544,44 @@ replaces `RESOURCE`/`ALLOWED_HOSTNAMES` with the deployed hostname):
 
 ```ts
 import { OAuthProvider } from '@cloudflare/workers-oauth-provider'
-import { createMcpHandler, getMcpAuthContext } from 'agents/mcp/server'
+import { createMcpHandler } from 'agents/mcp/server'
 import { createServer } from './mcp/server'
 import { vocAuthHandler } from './auth/handler'
+import { loadVocSession, VocSessionExpiredError } from './auth/refresh'
 
 export const RESOURCE = 'http://localhost:8787'
 export const ALLOWED_HOSTNAMES = ['localhost']
 
-export function createVocSessionFactory(env: Env): VocSessionFactory {
-  return async () => {
-    const userId = getMcpAuthContext()?.props?.voc_user_id
-    // …load the Voc credential from env.VOC_SESSIONS, build the PostgREST client
+// apiHandler must be an object with `.fetch` (the provider's validateHandler
+// rejects a bare function). The provider sets ctx.props from the decrypted
+// grant *before* dispatch, so identity is read here — not from inside the
+// dispatched MCP handler.
+export function createVocApiHandler(options: VocApiHandlerOptions = {}) {
+  const doFetch = options.fetchImpl ?? fetch
+  return {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+      const userId = (ctx as ProviderContext).props?.voc_user_id
+      if (!userId) return bearerChallenge(RESOURCE)               // no identity → 401
+      let session: VocTokenSession
+      try {
+        session = await loadVocSession(env, userId, nowSeconds(), doFetch) // refresh-on-expiry (§7.3)
+      } catch (error) {
+        if (error instanceof VocSessionExpiredError) return bearerChallenge(RESOURCE)
+        throw error
+      }
+      const handler = createMcpHandler(
+        () => createServer(async () => ({
+          client: new PostgrestClient({ baseUrl, anonKey, token: session.access_token, fetchImpl: doFetch }),
+          userId,
+        })),
+        { allowedHostnames: ALLOWED_HOSTNAMES },
+      )
+      return handler(request, env, ctx)
+    },
   }
 }
 
-// apiHandler must be an object with `.fetch` (the provider's validateHandler
-// rejects a bare function). Pass all three args through so the provider-set
-// ctx.props reaches the MCP handler.
-export const vocApiHandler = {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
-    const handler = createMcpHandler(() => createServer(createVocSessionFactory(env)), {
-      allowedHostnames: ALLOWED_HOSTNAMES,
-    })
-    return handler(request, env, ctx)
-  },
-}
+export const vocApiHandler = createVocApiHandler()
 
 export default new OAuthProvider<Env>({
   apiRoute: '/mcp',
@@ -586,14 +599,20 @@ export default new OAuthProvider<Env>({
 
 Two deliberate deviations from the earlier sketch: the `apiHandler` is an **object wrapper**
 (not the literal `createMcpHandler(createServer)`), because the provider calls
-`apiHandler.handler.fetch(request, env, ctx)` and requires an object; and the wiring is split
+`apiHandler.fetch(request, env, ctx)` and requires an object; and the wiring is split
 into `src/provider.ts` for the workerd entry-module rule above.
 
-The provider sets `ctx.props` from the grant, and the MCP handler surfaces it as
-`getMcpAuthContext().props`. `props.voc_user_id` — set by the authorize handler (§7.2), never
-by a tool argument — is the only identity source: the session factory reads it to load the Voc
-credential from `VOC_SESSIONS`. **No tool accepts a `user_id`**, mirroring Voc's architecture
-rule 4.
+The provider sets `ctx.props` from the grant **before** dispatching the api handler, so identity
+is read directly from `ctx.props` — not via `getMcpAuthContext()`, which only exists inside the
+dispatched handler. `props.voc_user_id` — set by the authorize handler (§7.2), never by a tool
+argument — is the only identity source. **No tool accepts a `user_id`**, mirroring Voc's
+architecture rule 4.
+
+The Voc credential is resolved, and refreshed on expiry, in a **preflight** inside the api
+handler (`loadVocSession`, §7.3) that runs *before* the MCP dispatch. This placement is
+deliberate: a tool turns every error into an `isError` result (§9) and could never emit the
+`401` + `WWW-Authenticate` an unusable Voc grant requires. The resolved session's `access_token`
+is closed over into the per-request `createServer` factory.
 
 ---
 
@@ -606,7 +625,7 @@ Every message names a next step:
 |---|---|
 | Record not found / RLS-invisible | `"Record <id> not found. Use search_records to find valid ids."` |
 | Unknown tag name | `"Unknown tag 'travels'. Known tags: travel, work, …. Use list_tags to list all."` |
-| Voc session expired | `isError: true`, plus a 401 so the client re-authenticates |
+| Voc session expired / revoked | `401` + `WWW-Authenticate` from the `/mcp` preflight (the tool never runs) so the client re-authenticates |
 | PostgREST 4xx/5xx | Status + PostgREST `message`/`details`, not a raw dump |
 | Partial create failure | Rollback attempted; report which step failed and that nothing was saved |
 
@@ -627,9 +646,9 @@ result must never be reported as "the user has no records".
   own consent dialog, with CSRF protection via a `__Host-CSRF_TOKEN` cookie and output
   escaping of the client-supplied `client_name` / `logo_uri`. Without this, a malicious
   client could exploit cached upstream consent (confused-deputy).
-- **`voc_user_id` comes from the provider-attached grant props** (read as
-  `getMcpAuthContext().props.voc_user_id`), written by the Worker after verifying Supabase's
-  token on `/callback` — not from anything the client sends.
+- **`voc_user_id` comes from the provider-attached grant props** (read as `ctx.props.voc_user_id`
+  in the `/mcp` api handler), written by the Worker after verifying Supabase's token on
+  `/callback` — not from anything the client sends.
 - **KV entries are encrypted at rest by Cloudflare**, and grants are encrypted by the library.
   Refresh tokens are the sensitive payload; never log them, never put them in a tool result.
 - **Narrow RLS surface:** the Worker can read/write the same rows the Voc app can. Deleting a
