@@ -12,7 +12,7 @@ import { OAuthProvider, type OAuthProviderOptions } from '@cloudflare/workers-oa
 import { createExecutionContext, env as poolEnv, reset } from 'cloudflare:test'
 import { beforeEach, describe, expect, it } from 'vitest'
 import worker from '../src/index'
-import { RESOURCE, vocApiHandler } from '../src/provider'
+import { vocApiHandler } from '../src/provider'
 import { createVocAuthHandler } from '../src/auth/handler'
 import type { Env } from '../src/types/env'
 import { jsonResponse } from './helpers'
@@ -22,6 +22,10 @@ const ctx = createExecutionContext()
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 const VOC_EMAIL = 'user@example.com'
+// The request origin the tests drive the Worker with. The Worker derives its
+// RFC 9728 `resource` (and its WWW-Authenticate metadata URL) from the request
+// origin, so this must match the URLs below.
+const RESOURCE = 'http://localhost:8787'
 const CLIENT_REDIRECT = 'http://localhost:8787/test-client-callback'
 const JWT = makeJwt({ sub: USER_ID, email: VOC_EMAIL })
 const TOKEN_RESPONSE = {

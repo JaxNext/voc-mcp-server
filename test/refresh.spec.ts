@@ -13,7 +13,7 @@
 
 import { createExecutionContext, env as poolEnv, reset } from 'cloudflare:test'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { RESOURCE, createVocApiHandler } from '../src/provider'
+import { createVocApiHandler } from '../src/provider'
 import { getVocSession, putVocSession, type VocTokenSession } from '../src/auth/token-store'
 import type { Env } from '../src/types/env'
 import { errorResponse, jsonResponse } from './helpers'
@@ -22,6 +22,10 @@ const env = poolEnv as unknown as Env
 
 const USER_ID = '11111111-1111-4111-8111-111111111111'
 const NOW = Math.floor(Date.now() / 1000)
+// The handler derives both the RFC 9728 resource and the WWW-Authenticate
+// metadata URL from the request origin, so the requests below are built from
+// this same origin.
+const RESOURCE = 'http://localhost:8787'
 
 function ctxWithIdentity(vocUserId: string | undefined): ExecutionContext {
   const ctx = createExecutionContext() as ExecutionContext & { props?: Record<string, unknown> }

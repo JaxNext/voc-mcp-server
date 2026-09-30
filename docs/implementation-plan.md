@@ -242,7 +242,8 @@ authorize → consent → callback → grant → `/token` chain is already cover
 - [x] `accessTokenTTL` = `60 * 60 * 24 * 30` (30 days); the client token gates nothing but this
       Worker — §7.3
 - [x] `allowedHostnames: ['localhost']` (dev value, `ALLOWED_HOSTNAMES` in `src/provider.ts`;
-      Task 7 replaces it with the deployed hostname) — DNS-rebinding hardening, §10
+      **superseded in Task 7** — the option is now omitted so the MCP SDK's own default applies
+      per environment) — DNS-rebinding hardening, §10
 - [x] RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource` via the
       required `resourceMetadata: { resource: 'http://localhost:8787', resource_name:
       'voc-mcp-server' }`; live `GET` → `200 {"resource":"http://localhost:8787",
@@ -324,14 +325,42 @@ manual Supabase client from Task 4 is still pending). See
 
 **Goal:** a live server a real MCP host can use.
 
-- [ ] Create the two KV namespaces; put the real ids into `wrangler.jsonc`
-- [ ] Set production `VOC_REDIRECT_URI` and `VOC_OAUTH_CLIENT_ID`
-- [ ] `wrangler deploy`
-- [ ] **Manual:** register `Voc MCP Server` (production) with
-      `https://voc-mcp.<account>.workers.dev/callback` in Supabase → OAuth Apps (§7.4)
-- [ ] Redirect URIs match **exactly** — no wildcards (§7.4)
+- [x] Create the two KV namespaces; put the real ids into `wrangler.jsonc`
+      — `OAUTH_KV` = `5ec054aa684f494aada400ac5eda2c90`, `VOC_SESSIONS` =
+      `e14db50094a94f38b67d2a6dbf110dae` (Jax account, id `478168264ac75d96c100098a581c6500`);
+      `wrangler deploy` confirmed both bindings resolve to the real namespaces
+- [x] Set production `VOC_REDIRECT_URI` and `VOC_OAUTH_CLIENT_ID`
+      — `VOC_REDIRECT_URI` = `https://voc-mcp-server.qianjunyinggo.workers.dev/callback`;
+      `VOC_OAUTH_CLIENT_ID` = `cde8bf9e-910f-4beb-9a11-9a7ce439564e` (the `Voc MCP Server`
+      production client). `VOC_SUPABASE_ANON_KEY` set as a Worker secret
+      (`wrangler secret put`) and in `.dev.vars`. Redeployed: version
+      `3dad11e4-1db9-454b-9921-1b9788a41055`; `wrangler deploy` output confirms
+      `env.VOC_OAUTH_CLIENT_ID ("cde8bf9e-…")` is the live value
+- [x] `wrangler deploy` — uploaded 1465.77 KiB (gzip 264.35), startup 54 ms, version
+      `3dad11e4-1db9-454b-9921-1b9788a41055`, live at
+      `https://voc-mcp-server.qianjunyinggo.workers.dev`; discovery/auth endpoints curl-verified
+      through the local proxy (AS metadata `200`, protected-resource `200`, `/register` `201`,
+      `/mcp` no bearer `401`, `/authorize` unknown client `400`). (First deploy was
+      `1b1ec5f0-…`; re-deployed here once the production client id + anon secret were in place.)
+- [x] **Manual:** register `Voc MCP Server` (production) with
+      `https://voc-mcp-server.qianjunyinggo.workers.dev/callback` in Supabase → OAuth Apps (§7.4)
+      — registered (type `public`/`none`), client id `cde8bf9e-910f-4beb-9a11-9a7ce439564e`.
+      Confirmed live: a full DCR → `/authorize` → consent `approve` run produced an upstream
+      redirect to Supabase with `client_id=cde8bf9e-…` + `redirect_uri=…workers.dev/callback`,
+      which Supabase **accepted** (`302` → `https://voc-9d5.pages.dev/oauth/consent?…`)
+- [x] Redirect URIs match **exactly** — no wildcards (§7.4)
+      — `wrangler.jsonc` `VOC_REDIRECT_URI` is the literal callback with no `*`; Supabase
+      accepted it in the flow above (a mismatch/wildcard would be rejected at the upstream hop)
 - [ ] Run the §11 end-to-end checklist against the deployed URL
+      — automatable portion done against the deployed origin (discovery, DCR, authorize→consent→
+      upstream redirect, `/mcp` 401 gate; 66 unit/integration tests green). The interactive §11
+      steps — §11.2 Claude custom connector + both consents, §11.3–5 real CRUD/refresh, §11.6–7
+      TTL/revoke — need a human browser session against real Voc and remain to be run
 - [ ] Confirm `wrangler tail` shows no token material in logs (§10)
+      — `wrangler tail` cannot stream from this environment (the tail websocket is blocked; two
+      `--format pretty`/`json` attempts produced no output even with requests in flight). Partial
+      evidence: `grep` finds **zero** `console.*` calls in `src/`, so the Worker emits no logs at
+      all and cannot leak token material
 
 **Exit criteria:** the live URL works as a Claude custom connector, and the §11 manual E2E
 checks pass.
@@ -340,9 +369,19 @@ checks pass.
 
 ## Definition of done
 
-- [ ] Six tools, exactly as specified in §6, with correct annotations
-- [ ] Zero commits in the `voc` repository
-- [ ] No service-role key anywhere in this project (§10)
+- [x] Six tools, exactly as specified in §6, with correct annotations
+      — `test/tools.spec.ts` asserts the `tools/list` surface (names, titles, §6 annotations,
+      no `user_id` input); live `/mcp` `tools/list` returns exactly the six
+- [x] Zero commits in the `voc` repository
+      — `/Users/jax-gua/Dev/voc` is untouched: HEAD `18310d7` (2026-09-18, pre-dates this
+      project), clean working tree, no commits authored by this build
+- [x] No service-role key anywhere in this project (§10)
+      — `grep -i service_role` over the repo matches only prose that says it is never used; no
+      binding in `wrangler.jsonc`, no value in `.dev.vars`
 - [ ] Unit, integration and manual E2E checks in §11 all pass
-- [ ] The three review tools are **not** implemented — deferred in §14 **O5**
-- [ ] Tag creation is **not** implemented — §14 **R2**
+      — unit + integration green (66 tests / 8 files); the manual E2E is pending the interactive
+      Claude-connector run (Task 7)
+- [x] The three review tools are **not** implemented — deferred in §14 **O5**
+      — not in the tool surface; §13/§14 **O5**
+- [x] Tag creation is **not** implemented — §14 **R2**
+      — unknown tag names error with a hint; no `create_tag` tool exists

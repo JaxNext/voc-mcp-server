@@ -31,20 +31,6 @@ import type { Env } from './types/env'
 import { PostgrestClient } from './voc/postgrest'
 
 /**
- * RFC 9728 protected-resource identifier (the provider's `resource` and the
- * token audience). Dev value: `wrangler dev` / localhost:8787, accepted because
- * the provider allows plain http on a loopback host. Task 7 replaces this with
- * the deployed `https://voc-mcp.<account>.workers.dev` origin (§7.4).
- */
-export const RESOURCE = 'http://localhost:8787'
-
-/**
- * Hosts accepted on `/mcp` (DNS-rebinding hardening, §10). Dev value; Task 7
- * replaces it with the deployment hostname.
- */
-export const ALLOWED_HOSTNAMES = ['localhost']
-
-/**
  * The MCP client's token gates nothing but this Worker — the real credential is
  * the Voc token in KV — so it is issued for 30 days (§7.3). Refresh tokens are
  * the provider default (30 days).
@@ -64,6 +50,19 @@ export interface VocApiHandlerOptions {
 }
 
 /**
+ * The RFC 9728 protected-resource identifier for one request is that request's
+ * own origin: `http://localhost:8787` under `wrangler dev`,
+ * `https://<worker>.<account>.workers.dev` in production. Deriving it — rather
+ * than hardcoding it per environment — is what lets one artifact serve both,
+ * and it mirrors the library's own `getAuthorizationServerIssuer(requestUrl)`.
+ * The provider accepts plain http only on a loopback host, so the dev origin is
+ * valid too.
+ */
+function originOf(request: Request): string {
+  return new URL(request.url).origin
+}
+
+/**
  * The protected handler. It must be an *object* exposing `fetch`: the provider
  * validates `apiHandler` as an `ExportedHandler` (a bare function fails that
  * check) and dispatches with `fetch(request, env, ctx)` — `ctx` carries the
@@ -78,9 +77,10 @@ export function createVocApiHandler(options: VocApiHandlerOptions = {}) {
   const doFetch = options.fetchImpl ?? fetch
   return {
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+      const origin = originOf(request)
       const userId = (ctx as ProviderContext).props?.voc_user_id
       if (typeof userId !== 'string' || userId === '') {
-        return bearerChallenge(RESOURCE)
+        return bearerChallenge(origin)
       }
 
       let session: VocTokenSession
@@ -88,23 +88,25 @@ export function createVocApiHandler(options: VocApiHandlerOptions = {}) {
         session = await loadVocSession(env, userId, Math.floor(Date.now() / 1000), doFetch)
       } catch (error) {
         if (error instanceof VocSessionExpiredError) {
-          return bearerChallenge(RESOURCE)
+          return bearerChallenge(origin)
         }
         throw error
       }
 
-      const handler = createMcpHandler(
-        () =>
-          createServer(async () => ({
-            client: new PostgrestClient({
-              baseUrl: env.VOC_SUPABASE_URL,
-              anonKey: env.VOC_SUPABASE_ANON_KEY,
-              token: session.access_token,
-              fetchImpl: doFetch,
-            }),
-            userId,
-          })),
-        { allowedHostnames: ALLOWED_HOSTNAMES },
+      // No `allowedHostnames`: the MCP SDK then applies its own default — the
+      // loopback set under `wrangler dev`, the request hostname on
+      // `*.workers.dev` — so the same artifact is correctly host-validated in
+      // both places (§10).
+      const handler = createMcpHandler(() =>
+        createServer(async () => ({
+          client: new PostgrestClient({
+            baseUrl: env.VOC_SUPABASE_URL,
+            anonKey: env.VOC_SUPABASE_ANON_KEY,
+            token: session.access_token,
+            fetchImpl: doFetch,
+          }),
+          userId,
+        })),
       )
       return handler(request, env, ctx)
     },
@@ -129,16 +131,42 @@ function bearerChallenge(resource: string): Response {
   })
 }
 
-export default new OAuthProvider<Env>({
-  apiRoute: '/mcp',
-  apiHandler: vocApiHandler,
-  defaultHandler: vocAuthHandler,
-  authorizeEndpoint: '/authorize',
-  tokenEndpoint: '/token',
-  clientRegistrationEndpoint: '/register',
-  accessTokenTTL: ACCESS_TOKEN_TTL,
-  // Required by workers-oauth-provider 1.1.0 (RFC 9728 protected-resource
-  // metadata served at /.well-known/oauth-protected-resource); the provider
-  // throws at construction without it. DCR only — CIMD stays disabled (§14 R1).
-  resourceMetadata: { resource: RESOURCE, resource_name: 'voc-mcp-server' },
-})
+/**
+ * One provider instance per origin. `OAuthProvider` bakes its
+ * `resourceMetadata.resource` in at construction and validates it then, so an
+ * origin-dependent `resource` means an origin-dependent instance. Real traffic
+ * only ever has one origin per deployment, so memoising the last origin makes
+ * this a single construction in practice. (`RESOURCE`/`ALLOWED_HOSTNAMES`
+ * module constants were removed in Task 7 for exactly this reason: a static
+ * value cannot be right in both `wrangler dev` and production.)
+ */
+let cachedProvider: { origin: string; provider: OAuthProvider<Env> } | undefined
+
+function providerFor(origin: string): OAuthProvider<Env> {
+  if (cachedProvider?.origin === origin) return cachedProvider.provider
+  const provider = new OAuthProvider<Env>({
+    apiRoute: '/mcp',
+    apiHandler: vocApiHandler,
+    defaultHandler: vocAuthHandler,
+    authorizeEndpoint: '/authorize',
+    tokenEndpoint: '/token',
+    clientRegistrationEndpoint: '/register',
+    accessTokenTTL: ACCESS_TOKEN_TTL,
+    // Required by workers-oauth-provider 1.1.0 (RFC 9728 protected-resource
+    // metadata served at /.well-known/oauth-protected-resource); the provider
+    // throws at construction without it. DCR only — CIMD stays disabled
+    // (§14 R1).
+    resourceMetadata: { resource: origin, resource_name: 'voc-mcp-server' },
+  })
+  cachedProvider = { origin, provider }
+  return provider
+}
+
+// The entry module's default export: dispatch to the provider for this
+// request's origin. A bare `OAuthProvider` instance cannot be the default
+// export any more, because which instance to use depends on the request.
+export default {
+  fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    return providerFor(originOf(request)).fetch(request, env, ctx)
+  },
+}

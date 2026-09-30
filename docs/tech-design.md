@@ -458,7 +458,7 @@ clients are registered over the course of the build (§14 **R3**):
 | # | When | Client name | Type | Redirect URI |
 |---|---|---|---|---|
 | 1 | Task 4 — local | `Voc MCP Server (dev)` | `public` (`none`) | `http://localhost:8787/callback` |
-| 2 | Task 7 — deployed | `Voc MCP Server` | `public` (`none`) | `https://voc-mcp.<account>.workers.dev/callback` |
+| 2 | Task 7 — deployed | `Voc MCP Server` | `public` (`none`) | `https://voc-mcp-server.qianjunyinggo.workers.dev/callback` |
 
 Redirect URIs must match **exactly** — no wildcards. `wrangler dev` serves on port 8787 by
 default, so pin the dev port so the registered URI stays valid.
@@ -495,13 +495,16 @@ copy on the MCP side should explain what access is being granted.)
   // http://localhost:8787/callback and must keep matching exactly (§7.4).
   "dev": { "port": 8787 },
   "kv_namespaces": [
-    { "binding": "OAUTH_KV",     "id": "<workers-oauth-provider KV>" },
-    { "binding": "VOC_SESSIONS", "id": "<voc token custody KV>" }
+    { "binding": "OAUTH_KV",     "id": "5ec054aa684f494aada400ac5eda2c90" },
+    { "binding": "VOC_SESSIONS", "id": "e14db50094a94f38b67d2a6dbf110dae" }
   ],
+  // Production values: this block is what `wrangler deploy` ships. `wrangler dev`
+  // overrides the two OAuth values from `.dev.vars` (local secrets win over
+  // `vars`), so one config serves dev and prod without an `[env.*]` split.
   "vars": {
     "VOC_SUPABASE_URL": "https://mqehfyrkgyzodlqwkozf.supabase.co",
     "VOC_OAUTH_CLIENT_ID": "<client_id from OAuth Apps>",
-    "VOC_REDIRECT_URI": "https://voc-mcp.<account>.workers.dev/callback"
+    "VOC_REDIRECT_URI": "https://voc-mcp-server.qianjunyinggo.workers.dev/callback"
   }
 }
 ```
@@ -539,8 +542,10 @@ entry module's named exports as worker entrypoints (each must be a function or a
 export { default } from './provider'
 ```
 
-`src/provider.ts` holds the provider and its supporting constants (dev values; Task 7
-replaces `RESOURCE`/`ALLOWED_HOSTNAMES` with the deployed hostname):
+`src/provider.ts` holds the provider and the request-derived origin wiring. The Worker derives
+both the RFC 9728 `resource` and the `WWW-Authenticate` metadata URL from the **request
+origin**, so a single artifact is correct under `wrangler dev` *and* at the deployed hostname
+(§14 **R3**):
 
 ```ts
 import { OAuthProvider } from '@cloudflare/workers-oauth-provider'
@@ -549,8 +554,9 @@ import { createServer } from './mcp/server'
 import { vocAuthHandler } from './auth/handler'
 import { loadVocSession, VocSessionExpiredError } from './auth/refresh'
 
-export const RESOURCE = 'http://localhost:8787'
-export const ALLOWED_HOSTNAMES = ['localhost']
+function originOf(request: Request): string {
+  return new URL(request.url).origin
+}
 
 // apiHandler must be an object with `.fetch` (the provider's validateHandler
 // rejects a bare function). The provider sets ctx.props from the decrypted
@@ -560,22 +566,24 @@ export function createVocApiHandler(options: VocApiHandlerOptions = {}) {
   const doFetch = options.fetchImpl ?? fetch
   return {
     async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+      const origin = originOf(request)
       const userId = (ctx as ProviderContext).props?.voc_user_id
-      if (!userId) return bearerChallenge(RESOURCE)               // no identity → 401
+      if (!userId) return bearerChallenge(origin)                 // no identity → 401
       let session: VocTokenSession
       try {
         session = await loadVocSession(env, userId, nowSeconds(), doFetch) // refresh-on-expiry (§7.3)
       } catch (error) {
-        if (error instanceof VocSessionExpiredError) return bearerChallenge(RESOURCE)
+        if (error instanceof VocSessionExpiredError) return bearerChallenge(origin)
         throw error
       }
-      const handler = createMcpHandler(
-        () => createServer(async () => ({
-          client: new PostgrestClient({ baseUrl, anonKey, token: session.access_token, fetchImpl: doFetch }),
-          userId,
-        })),
-        { allowedHostnames: ALLOWED_HOSTNAMES },
-      )
+      // No `allowedHostnames`: the MCP SDK then applies its own default — the
+      // loopback set under `wrangler dev`, the request hostname on
+      // `*.workers.dev` — so the same artifact is correctly host-validated in
+      // both places (§10).
+      const handler = createMcpHandler(() => createServer(async () => ({
+        client: new PostgrestClient({ baseUrl, anonKey, token: session.access_token, fetchImpl: doFetch }),
+        userId,
+      })))
       return handler(request, env, ctx)
     },
   }
@@ -583,24 +591,42 @@ export function createVocApiHandler(options: VocApiHandlerOptions = {}) {
 
 export const vocApiHandler = createVocApiHandler()
 
-export default new OAuthProvider<Env>({
-  apiRoute: '/mcp',
-  apiHandler: vocApiHandler,
-  defaultHandler: vocAuthHandler,
-  authorizeEndpoint: '/authorize',
-  tokenEndpoint: '/token',
-  clientRegistrationEndpoint: '/register',
-  accessTokenTTL: 60 * 60 * 24 * 30,
-  // Required by workers-oauth-provider 1.1.0 (RFC 9728 protected-resource
-  // metadata); the provider throws at construction without it.
-  resourceMetadata: { resource: RESOURCE, resource_name: 'voc-mcp-server' },
-})
+// The provider bakes `resourceMetadata.resource` at construction and validates
+// it then (absolute HTTPS, or http on loopback only), so an origin-dependent
+// `resource` needs an origin-dependent instance. Memoised on the origin.
+let cachedProvider: { origin: string; provider: OAuthProvider<Env> } | undefined
+
+function providerFor(origin: string): OAuthProvider<Env> {
+  if (cachedProvider?.origin === origin) return cachedProvider.provider
+  const provider = new OAuthProvider<Env>({
+    apiRoute: '/mcp',
+    apiHandler: vocApiHandler,
+    defaultHandler: vocAuthHandler,
+    authorizeEndpoint: '/authorize',
+    tokenEndpoint: '/token',
+    clientRegistrationEndpoint: '/register',
+    accessTokenTTL: 60 * 60 * 24 * 30,
+    // Required by workers-oauth-provider 1.1.0 (RFC 9728 protected-resource
+    // metadata); the provider throws at construction without it.
+    resourceMetadata: { resource: origin, resource_name: 'voc-mcp-server' },
+  })
+  cachedProvider = { origin, provider }
+  return provider
+}
+
+export default {
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    return providerFor(originOf(request)).fetch(request, env, ctx)
+  },
+}
 ```
 
 Two deliberate deviations from the earlier sketch: the `apiHandler` is an **object wrapper**
 (not the literal `createMcpHandler(createServer)`), because the provider calls
 `apiHandler.fetch(request, env, ctx)` and requires an object; and the wiring is split
-into `src/provider.ts` for the workerd entry-module rule above.
+into `src/provider.ts` for the workerd entry-module rule above. The default export is an
+`ExportedHandler` **object** rather than a bare `OAuthProvider` instance so the origin can be
+read from the incoming request before the provider is constructed.
 
 The provider sets `ctx.props` from the grant **before** dispatching the api handler, so identity
 is read directly from `ctx.props` — not via `getMcpAuthContext()`, which only exists inside the
@@ -653,8 +679,11 @@ result must never be reported as "the user has no records".
   Refresh tokens are the sensitive payload; never log them, never put them in a tool result.
 - **Narrow RLS surface:** the Worker can read/write the same rows the Voc app can. Deleting a
   record destroys review history — hence `destructiveHint: true`.
-- **`allowedHostnames`** on `createMcpHandler` restricts the accepted `Host` header;
-  set it to the deployment hostname to harden against DNS rebinding.
+- **`allowedHostnames`** on `createMcpHandler` is deliberately **omitted**, so the MCP SDK
+  applies its own default: the loopback set (`localhost`, `127.0.0.1`, `[::1]`) under
+  `wrangler dev`, the request hostname on `*.workers.dev`. That keeps one artifact correct in
+  both places while still rejecting a foreign `Host` (DNS-rebinding hardening). Hardcoding a
+  single hostname would brick either dev or prod.
 - Supabase's OAuth server is **beta** — the design accepts that risk, consistent with Voc's
   own OAuth decisions.
 
@@ -687,8 +716,10 @@ result must never be reported as "the user has no records".
 
 **End-to-end (manual, against real Voc):**
 
-1. `wrangler dev` on a stable hostname; register that callback URI in Voc's OAuth Apps.
-2. Add the local URL as a custom connector in Claude, complete both consents.
+1. Bring the Worker up on a stable origin — `wrangler dev` locally, or the deployed
+   `https://voc-mcp-server.qianjunyinggo.workers.dev` — and register that callback URI in Voc's
+   OAuth Apps (§7.4).
+2. Add that URL (as `…/mcp`) as a custom connector in Claude, complete both consents.
 3. `create_record` → verify the row appears in the Voc UI **and that it is due for review**
    (this is the assertion that catches a missing `review_states` insert).
 4. `search_records` with a tag filter and with a `,()`-laden query.
@@ -755,7 +786,12 @@ OAuth Apps:
 | # | When | Redirect URI |
 |---|---|---|
 | 1 | Task 4, local development | the `wrangler dev` origin (e.g. `http://localhost:8787/callback`) |
-| 2 | Task 7, after `wrangler deploy` | `https://voc-mcp.<account>.workers.dev/callback` |
+| 2 | Task 7, after `wrangler deploy` | `https://voc-mcp-server.qianjunyinggo.workers.dev/callback` |
+
+One Worker artifact serves both, because it derives its RFC 9728 `resource` and its
+`WWW-Authenticate` metadata URL from the **request origin** (§8). The two clients differ only
+in what Voc has registered as their redirect URI; `wrangler.jsonc` `vars` carry the production
+pair and `.dev.vars` overrides them locally.
 
 This keeps local development unblocked rather than waiting on a final hostname. Attaching a
 custom domain and registering once remains a reasonable later cleanup.

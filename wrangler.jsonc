@@ -11,19 +11,25 @@
   // Pin the dev port: the Supabase-registered redirect URI is
   // http://localhost:8787/callback and must keep matching exactly (§7.4).
   "dev": { "port": 8787 },
-  // Both namespaces are simulated locally by `wrangler dev`; real ids are created
-  // and filled in by Task 7 of docs/implementation-plan.md.
+  // Real namespaces created in the Jax account (Task 7). `wrangler dev` also
+  // simulates them locally, so dev never touches these.
   "kv_namespaces": [
-    { "binding": "OAUTH_KV", "id": "TODO-task-7-oauth-kv" },
-    { "binding": "VOC_SESSIONS", "id": "TODO-task-7-voc-sessions" }
+    { "binding": "OAUTH_KV", "id": "5ec054aa684f494aada400ac5eda2c90" },
+    { "binding": "VOC_SESSIONS", "id": "e14db50094a94f38b67d2a6dbf110dae" }
   ],
+  // Production vars — this block is what `wrangler deploy` ships. `wrangler dev`
+  // overrides both OAuth values from `.dev.vars` (local secrets win over `vars`),
+  // so one config serves both environments without an `[env.*]` split.
+  //
+  // Both values must correspond to the *deployed* origin: `VOC_REDIRECT_URI` is
+  // the callback registered against `VOC_OAUTH_CLIENT_ID` in Supabase →
+  // Authentication → OAuth Apps (§7.4). Redirect URIs match exactly — no
+  // wildcards.
   "vars": {
     "VOC_SUPABASE_URL": "https://mqehfyrkgyzodlqwkozf.supabase.co",
-    // Task 4 registers the dev client in Supabase → Authentication → OAuth Apps
-    // and fills this in (§7.4).
-    "VOC_OAUTH_CLIENT_ID": "TODO-task-4",
-    // Dev redirect URI, pinned to port 8787 so the registered callback stays valid
-    // (Task 4). Task 7 overrides this with the deployed URI.
-    "VOC_REDIRECT_URI": "http://localhost:8787/callback"
+    // The production client (`Voc MCP Server`), registered with the callback
+    // below (§7.4).
+    "VOC_OAUTH_CLIENT_ID": "cde8bf9e-910f-4beb-9a11-9a7ce439564e",
+    "VOC_REDIRECT_URI": "https://voc-mcp-server.qianjunyinggo.workers.dev/callback"
   }
 }
